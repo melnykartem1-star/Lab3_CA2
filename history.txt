@@ -1,0 +1,95 @@
+    1  history -w
+    2  sudo apt install make libncurses5-dev libssl-dev bc bison flex -y
+    3  mkdir ~/repos
+    4  cd ~/repos
+    5  git clone https://gitlab.denx.de/u-boot/u-boot.git
+    6  cd u-boot
+    7  git tag | grep -v rc | tail -5
+    8  git checkout v2019.07
+    9  curl https://patchwork.ozlabs.org/series/130450/mbox/ | git am
+   10  export PATH=/opt/gcc-arm-8.3-2019.03-x86_64-arm-eabi/bin:$PATH
+   11  export CROSS_COMPILE='ccache arm-eabi-'
+   12  export ARCH=arm
+   13  make am335x_boneblack_defconfig
+   14  make HOSTCFLAGS="-O2 -fcommon" -j4
+   15  cd ~/repos
+   16  git clone git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git
+   17  lsblk
+   18  sudo growpart /dev/sda 2
+   19  sudo resize2fs /dev/sda2
+   20  df -h /
+   21  git clone git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git
+   22  cd linux-stable
+   23  git checkout linux-4.19.y
+   24  export PATH=/opt/gcc-arm-8.3-2019.03-x86_64-arm-eabi/bin:$PATH
+   25  export CROSS_COMPILE='ccache arm-eabi-'
+   26  export ARCH=arm
+   27  mkdir fragments
+   28  vim fragments/bbb.cfg
+   29  ./scripts/kconfig/merge_config.sh arch/arm/configs/multi_v7_defconfig fragments/bbb.cfg
+   30  make -j4 zImage modules am335x-boneblack.dtb
+   31  cd ~/repos
+   32  git clone git://git.busybox.net/busybox
+   33  cd busybox
+   34  git branch -a | grep stable | sort -V | tail -1
+   35  git checkout 1_37_stable
+   36  export ARCH=arm
+   37  export PATH=/opt/gcc-arm-8.3-2019.03-x86_64-arm-linux-gnueabihf/bin:$PATH
+   38  export CROSS_COMPILE="ccache arm-linux-gnueabihf-"
+   39  make defconfig
+   40  make -j4
+   41  make install
+   42  make distclean
+   43  export ARCH=arm
+   44  export PATH=/opt/gcc-arm-8.3-2019.03-x86_64-arm-linux-gnueabihf/bin:$PATH
+   45  export CROSS_COMPILE="ccache arm-linux-gnueabihf-"
+   46  make defconfig
+   47  sed -i 's/CONFIG_SHA1_HWACCEL=y/# CONFIG_SHA1_HWACCEL is not set/' .config
+   48  sed -i 's/CONFIG_SHA256_HWACCEL=y/# CONFIG_SHA256_HWACCEL is not set/' .config
+   49  make -j4
+   50  make install
+   51  mkdir -p _install/{boot,dev,etc\/init.d,lib,proc,root,sys\/kernel\/debug,tmp}
+   52  cat << 'EOF' > _install/etc/init.d/rcS
+#!/bin/sh
+
+mount -t sysfs none /sys
+mount -t proc none /proc
+mount -t debugfs none /sys/kernel/debug
+
+echo /sbin/mdev > /proc/sys/kernel/hotplug
+mdev -s
+EOF
+
+   53  chmod +x _install/etc/init.d/rcS
+   54  ln -s bin/busybox _install/init
+   55  cd _install/boot
+   56  cp ~/repos/linux-stable/arch/arm/boot/zImage .
+   57  cp ~/repos/linux-stable/arch/arm/boot/dts/am335x-boneblack.dtb .
+   58  cp ~/repos/linux-stable/System.map .
+   59  cp ~/repos/linux-stable/.config ./config
+   60  cd -
+   61  cd ~/repos/linux-stable
+   62  export INSTALL_MOD_PATH=~/repos/busybox/_install
+   63  export ARCH=arm
+   64  make modules_install
+   65  cd -
+   66  ${CROSS_COMPILE}readelf -d _install/bin/busybox | grep NEEDED
+   67  cd _install/lib
+   68  libc_dir=$(${CROSS_COMPILE}gcc -print-sysroot)/lib
+   69  cp -a $libc_dir/*.so* .
+   70  cd -
+   71  echo '$MODALIAS=.* root:root 660 @modprobe "$MODALIAS"' > _install/etc/mdev.conf
+   72  echo 'root:x:0:' > _install/etc/group
+   73  echo 'root:x:0:0:root:/root:/bin/sh' > _install/etc/passwd
+   74  echo 'root::10933:0:99999:7:::' > _install/etc/shadow
+   75  echo "nameserver 8.8.8.8" > _install/etc/resolv.conf
+   76  sudo apt install qemu-system-arm
+   77  apt update
+   78  sudo apt update
+   79  sudo apt install qemu-system-arm
+   80  cd ~/repos/busybox
+   81  cd _install
+   82  find . | cpio -o -H newc | gzip > ../rootfs.cpio.gz
+   83  cd ..
+   84  qemu-system-arm -kernel _install/boot/zImage -initrd rootfs.cpio.gz -machine virt -nographic -m 512 --append "root=/dev/ram0 rw console=ttyAMA0,115200 mem=512M"
+   85  cd ~ && date && history > history.txt 
